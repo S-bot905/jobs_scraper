@@ -195,36 +195,63 @@ def scrape_wellfound(query_kw="DevOps Engineer"):
     return results
 
 
-def scrape_generic_site_search(domain, kw):
-    """
-    Generic site: search via DuckDuckGo HTML query for a domain and keyword.
-    (Using simple query URL.) Best-effort; may return search engine HTML.
-    """
+def scrape_naukri(query_kw="DevOps Engineer"):
     results = []
-    query = f"site:{domain} {kw} remote india"
-    url = "https://duckduckgo.com/html"
+    q = query_kw.replace(" ", "%20")
+    url = f"https://www.naukri.com/{q}-jobs?k={q}&l=India"
     try:
-        r = requests.get(url, params={"q": query}, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        r = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
         time.sleep(SLEEP_BETWEEN_REQUESTS)
         soup = BeautifulSoup(r.text, "html.parser")
-        links = soup.select("a.result__a")
-        for a in links[:15]:
-            link = a.get("href")
-            title = normalize_text(a.get_text())
-            snippet = ""
-            parent = a.find_parent("div")
-            if parent:
-                snippet = normalize_text(parent.get_text())
+
+        cards = soup.select("article.jobTuple")
+        for c in cards[:20]:
+            title = normalize_text(c.select_one("a.title").get_text()) if c.select_one("a.title") else ""
+            link = c.select_one("a.title").get("href") if c.select_one("a.title") else ""
+            company = normalize_text(c.select_one(".subTitle").get_text()) if c.select_one(".subTitle") else ""
+            location = normalize_text(c.select_one(".locWdth").get_text()) if c.select_one(".locWdth") else ""
+            snippet = normalize_text(c.get_text())
+
             results.append({
                 "title": title,
-                "company": domain,
-                "location": snippet,
+                "company": company,
+                "location": location,
                 "link": link,
-                "source": f"Search:{domain}",
+                "source": "Naukri",
                 "snippet": snippet
             })
     except Exception as e:
-        print("Generic search error for", domain, e)
+        print("Naukri scrape error:", e)
+
+    return results
+
+
+def scrape_foundit(query_kw="DevOps Engineer"):
+    results = []
+    q = query_kw.replace(" ", "%20")
+    url = f"https://www.foundit.in/srp/results?query={q}&locations=India"
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        time.sleep(SLEEP_BETWEEN_REQUESTS)
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        cards = soup.select("section.card-container")
+        for c in cards[:20]:
+            title = normalize_text(c.get_text())
+            link_tag = c.find("a", href=True)
+            link = link_tag["href"] if link_tag else ""
+
+            results.append({
+                "title": title,
+                "company": None,
+                "location": "India",
+                "link": link,
+                "source": "Foundit",
+                "snippet": title
+            })
+    except Exception as e:
+        print("Foundit scrape error:", e)
+
     return results
 
 
@@ -232,36 +259,37 @@ def scrape_generic_site_search(domain, kw):
 def collect_jobs():
     jobs = []
 
-    # 1) Search keywords on Indeed
+    # 1) Job portals (Indeed + Naukri + Foundit + Wellfound)
     for kw in KEYWORDS:
         jobs.extend(scrape_indeed(kw))
-
-    # 2) Wellfound (AngelList)
-    for kw in KEYWORDS:
+        jobs.extend(scrape_naukri(kw))
+        jobs.extend(scrape_foundit(kw))
         jobs.extend(scrape_wellfound(kw))
 
-    # 3) Generic site searches for major companies (best-effort)
+    # 2) Company careers + LinkedIn (safe site search)
     big_tech_domains = [
-        "careers.google.com", "careers.amazon.com", "jobs.lever.co",
-        "jobs.github.com", "netflixjobs.com", "careers.microsoft.com"
+        "careers.google.com",
+        "careers.amazon.com",
+        "jobs.lever.co",
+        "careers.microsoft.com",
+        "linkedin.com/jobs"
     ]
+
     for domain in big_tech_domains:
         for kw in KEYWORDS[:4]:
             jobs.extend(scrape_generic_site_search(domain, kw))
 
-    # deduplicate by link
+    # 3) Deduplicate results by link/title
     uniq = {}
     for j in jobs:
-        link = j.get("link") or j.get("title") or ""
-        if not link:
-            continue
-        key = link
-        if key not in uniq:
+        key = j.get("link") or j.get("title")
+        if key and key not in uniq:
             uniq[key] = j
 
     results = list(uniq.values())
     print(f"Collected {len(results)} raw results")
     return results
+
 
 
 def filter_jobs(raw_jobs):
